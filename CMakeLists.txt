@@ -16,4 +16,5 @@ add_executable(MIA_P1
     Disk/DiskManager.cpp
     Utilities/FileUtils.cpp
     Mount/MountManager.cpp
+    FileSystem/MkfsManager.cpp
 )

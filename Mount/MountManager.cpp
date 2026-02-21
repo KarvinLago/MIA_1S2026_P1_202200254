@@ -4,8 +4,8 @@
 #include <iostream>
 #include <algorithm>
 
-static std::vector<MountedPartition> mountedList;
-
+// static std::vector<MountedPartition> mountedList;
+std::vector<MountedPartition> mountedList;
 // Carnet completo para generar ID
 static std::string fullCarnet = "202200254";
 

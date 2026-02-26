@@ -2,6 +2,8 @@
 // #include "../Disk/DiskManager.h"
 // #include "../Mount/MountManager.h"
 // #include "../FileSystem/MkfsManager.h"
+// #include "../Auth/LoginManager.h"
+// #include "../Users/GroupManager.h"
 // #include <iostream>
 // #include <sstream>
 // #include <map>
@@ -91,6 +93,25 @@
 //         MkfsManager::Mkfs(params["id"]);
 //     }
 
+//     // ================= LOGIN =================
+//     else if(command == "login"){
+//         if(!params.count("user") || !params.count("pass") || !params.count("id")){
+//             std::cout << "Error: login requiere -user -pass -id\n";
+//             return;
+//         }
+
+//         LoginManager::Login(
+//             params["user"],
+//             params["pass"],
+//             params["id"]
+//         );
+//     }
+
+//     // ================= LOGOUT =================
+//     else if(command == "logout"){
+//         LoginManager::Logout();
+//     }
+
 //     else{
 //         std::cout << "Comando no reconocido\n";
 //     }
@@ -98,11 +119,13 @@
 
 // }
 
+
 #include "Analyzer.h"
 #include "../Disk/DiskManager.h"
 #include "../Mount/MountManager.h"
 #include "../FileSystem/MkfsManager.h"
 #include "../Auth/LoginManager.h"
+#include "../Users/GroupManager.h"
 #include <iostream>
 #include <sstream>
 #include <map>
@@ -211,6 +234,17 @@ void Analyze()
         LoginManager::Logout();
     }
 
+    // ================= MKGRP =================
+    else if(command == "mkgrp"){
+        if(!params.count("name")){
+            std::cout << "Error: mkgrp requiere -name\n";
+            return;
+        }
+
+        GroupManager::Mkgrp(params["name"]);
+    }
+
+    // ================= COMANDO NO RECONOCIDO =================
     else{
         std::cout << "Comando no reconocido\n";
     }

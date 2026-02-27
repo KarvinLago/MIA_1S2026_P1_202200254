@@ -112,6 +112,17 @@
 //         LoginManager::Logout();
 //     }
 
+//     // ================= MKGRP =================
+//     else if(command == "mkgrp"){
+//         if(!params.count("name")){
+//             std::cout << "Error: mkgrp requiere -name\n";
+//             return;
+//         }
+
+//         GroupManager::Mkgrp(params["name"]);
+//     }
+
+//     // ================= COMANDO NO RECONOCIDO =================
 //     else{
 //         std::cout << "Comando no reconocido\n";
 //     }
@@ -167,6 +178,12 @@ void Analyze()
 
     // ================= MKDISK =================
     if(command == "mkdisk"){
+        if(!params.count("size") || !params.count("fit") ||
+           !params.count("unit") || !params.count("path")){
+            std::cout << "Error: mkdisk requiere -size -fit -unit -path\n";
+            return;
+        }
+
         DiskManager::Mkdisk(
             std::stoi(params["size"]),
             params["fit"][0],
@@ -177,6 +194,12 @@ void Analyze()
 
     // ================= FDISK =================
     else if(command == "fdisk"){
+        if(!params.count("size") || !params.count("path") ||
+           !params.count("name")){
+            std::cout << "Error: fdisk requiere -size -path -name\n";
+            return;
+        }
+
         DiskManager::Fdisk(
             std::stoi(params["size"]),
             params["path"],
@@ -217,7 +240,8 @@ void Analyze()
 
     // ================= LOGIN =================
     else if(command == "login"){
-        if(!params.count("user") || !params.count("pass") || !params.count("id")){
+        if(!params.count("user") || !params.count("pass") ||
+           !params.count("id")){
             std::cout << "Error: login requiere -user -pass -id\n";
             return;
         }
@@ -244,6 +268,16 @@ void Analyze()
         GroupManager::Mkgrp(params["name"]);
     }
 
+    // ================= RMGRP =================
+    else if(command == "rmgrp"){
+        if(!params.count("name")){
+            std::cout << "Error: rmgrp requiere -name\n";
+            return;
+        }
+
+        GroupManager::Rmgrp(params["name"]);
+    }
+
     // ================= COMANDO NO RECONOCIDO =================
     else{
         std::cout << "Comando no reconocido\n";
@@ -251,3 +285,5 @@ void Analyze()
 }
 
 }
+
+

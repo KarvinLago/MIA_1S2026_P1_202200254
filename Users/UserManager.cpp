@@ -171,4 +171,142 @@ void Mkusr(const std::string& user,
     std::cout << "Usuario creado correctamente\n";
 }
 
+void Rmusr(const std::string& user)
+{
+    // 🔹 Validar sesión
+    if(!LoginManager::IsLogged()){
+        std::cout << "Error: Debe iniciar sesión\n";
+        return;
+    }
+
+    // 🔹 Solo root
+    if(!LoginManager::IsRoot()){
+        std::cout << "Error: Solo root puede ejecutar rmusr\n";
+        return;
+    }
+
+    std::string id = LoginManager::GetSessionId();
+
+    MountedPartition* mounted = nullptr;
+    for(auto& m : mountedList){
+        if(m.id == id){
+            mounted = &m;
+            break;
+        }
+    }
+
+    if(!mounted){
+        std::cout << "Error: Partición no encontrada\n";
+        return;
+    }
+
+    auto file = FileUtils::OpenFile(mounted->path);
+    if(!file.is_open()){
+        std::cout << "Error: No se pudo abrir el disco\n";
+        return;
+    }
+
+    // 🔹 Localizar partición
+    MBR mbr{};
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(&mbr), sizeof(MBR));
+
+    Partition* partition = nullptr;
+    for(int i=0;i<4;i++){
+        if(mbr.mbr_partitions[i].part_s > 0 &&
+           std::string(mbr.mbr_partitions[i].part_name) == mounted->name){
+            partition = &mbr.mbr_partitions[i];
+            break;
+        }
+    }
+
+    if(!partition){
+        std::cout << "Error: Partición no encontrada\n";
+        file.close();
+        return;
+    }
+
+    SuperBlock sb{};
+    file.seekg(partition->part_start);
+    file.read(reinterpret_cast<char*>(&sb), sizeof(SuperBlock));
+
+    Inode usersInode{};
+    file.seekg(sb.s_inode_start + sizeof(Inode));
+    file.read(reinterpret_cast<char*>(&usersInode), sizeof(Inode));
+
+    int blockIndex = usersInode.i_block[0];
+    int blockPos = sb.s_block_start + (blockIndex * sizeof(FileBlock));
+
+    FileBlock usersBlock{};
+    file.seekg(blockPos);
+    file.read(reinterpret_cast<char*>(&usersBlock), sizeof(FileBlock));
+
+    std::string content(usersBlock.b_content);
+
+    std::stringstream ss(content);
+    std::string line;
+    std::string newContent;
+    bool userFound = false;
+
+    while(std::getline(ss, line)){
+        if(line.empty()){
+            newContent += "\n";
+            continue;
+        }
+
+        std::vector<std::string> tokens;
+        std::stringstream ls(line);
+        std::string token;
+
+        while(std::getline(ls, token, ',')){
+            tokens.push_back(token);
+        }
+
+        if(tokens.size() >= 5 &&
+           tokens[1] == "U" &&
+           tokens[3] == user &&
+           tokens[0] != "0")
+        {
+            tokens[0] = "0"; // marcar eliminado
+            userFound = true;
+        }
+
+        // reconstruir línea
+        for(size_t i = 0; i < tokens.size(); i++){
+            newContent += tokens[i];
+            if(i < tokens.size()-1)
+                newContent += ",";
+        }
+        newContent += "\n";
+    }
+
+    if(!userFound){
+        std::cout << "Error: Usuario no existe\n";
+        file.close();
+        return;
+    }
+
+    // 🔹 Validación de tamaño
+    if(newContent.size() > sizeof(usersBlock.b_content)){
+        std::cout << "Error: users.txt excede tamaño máximo (64 bytes)\n";
+        file.close();
+        return;
+    }
+
+    FileBlock newBlock{};
+    memset(newBlock.b_content, 0, sizeof(newBlock.b_content));
+    memcpy(newBlock.b_content, newContent.c_str(), newContent.size());
+
+    file.seekp(blockPos);
+    file.write(reinterpret_cast<char*>(&newBlock), sizeof(FileBlock));
+
+    usersInode.i_size = newContent.size();
+    file.seekp(sb.s_inode_start + sizeof(Inode));
+    file.write(reinterpret_cast<char*>(&usersInode), sizeof(Inode));
+
+    file.close();
+
+    std::cout << "Usuario eliminado correctamente\n";
+}
+
 }

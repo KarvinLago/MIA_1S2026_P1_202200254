@@ -162,6 +162,19 @@ void Analyze()
         );
     }
 
+    // ================= RMUSR =================
+    else if(command == "rmusr"){
+        if(!params.count("user")){
+            std::cout << "Error: rmusr requiere -user\n";
+            return;
+        }
+
+        UserManager::Rmusr(params["user"]);
+    }
+
+
+
+
     // ================= COMANDO NO RECONOCIDO =================
     else{
         std::cout << "Comando no reconocido\n";

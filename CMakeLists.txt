@@ -17,6 +17,7 @@ add_executable(MIA_P1
     Utilities/FileUtils.cpp
     Mount/MountManager.cpp
     FileSystem/MkfsManager.cpp
+    FileSystem/BlockManager.cpp
     Auth/LoginManager.cpp
     Users/GroupManager.cpp
     Users/UserManager.cpp

@@ -71,5 +71,8 @@ struct FileBlock {
     char b_content[64];
 };
 
+struct PointerBlock {
+    int32_t b_pointers[16];
+};
 
 #pragma pack(pop)

@@ -33,13 +33,11 @@ int AllocateBlock(std::fstream& file, SuperBlock& sb, int partitionStart)
         {
             bitmap[i] = '1';
 
-            // escribir bitmap actualizado
             file.seekp(sb.s_bm_block_start);
             file.write(bitmap.data(), sb.s_blocks_count);
 
             sb.s_free_blocks_count--;
 
-            // actualizar s_first_blo
             for(int j = 0; j < sb.s_blocks_count; j++)
             {
                 if(bitmap[j] == '0')
@@ -55,7 +53,7 @@ int AllocateBlock(std::fstream& file, SuperBlock& sb, int partitionStart)
         }
     }
 
-    return -1; // sin espacio
+    return -1;
 }
 
 // ======================================================
@@ -97,20 +95,61 @@ std::string ReadFileContent(std::fstream& file,
 {
     std::string content;
 
-    int blocksNeeded = std::ceil((double)inode.i_size / sizeof(FileBlock));
+    // int blocksNeeded =
+    //     std::ceil((double)inode.i_size / sizeof(FileBlock));
 
-    for(int i = 0; i < blocksNeeded && i < 12; i++)
+    int blocksNeeded =
+    (inode.i_size + sizeof(FileBlock) - 1) / sizeof(FileBlock);
+
+    int blocksRead = 0;
+
+    // ================= DIRECTOS =================
+    for(int i = 0; i < 12 && blocksRead < blocksNeeded; i++)
     {
         if(inode.i_block[i] == -1) break;
 
+        FileBlock block{};
         int blockPos = sb.s_block_start +
                        (inode.i_block[i] * sizeof(FileBlock));
 
-        FileBlock block{};
         file.seekg(blockPos);
-        file.read(reinterpret_cast<char*>(&block), sizeof(FileBlock));
+        file.read(reinterpret_cast<char*>(&block),
+                  sizeof(FileBlock));
 
-        content.append(block.b_content, sizeof(FileBlock));
+        content.append(block.b_content,
+                       sizeof(FileBlock));
+
+        blocksRead++;
+    }
+
+    // ================= INDIRECTO SIMPLE =================
+    if(blocksRead < blocksNeeded && inode.i_block[12] != -1)
+    {
+        PointerBlock pb{};
+        int pointerPos = sb.s_block_start +
+                         (inode.i_block[12] * sizeof(FileBlock));
+
+        file.seekg(pointerPos);
+        file.read(reinterpret_cast<char*>(&pb),
+                  sizeof(PointerBlock));
+
+        for(int i = 0; i < 16 && blocksRead < blocksNeeded; i++)
+        {
+            if(pb.b_pointers[i] == -1) break;
+
+            FileBlock block{};
+            int blockPos = sb.s_block_start +
+                           (pb.b_pointers[i] * sizeof(FileBlock));
+
+            file.seekg(blockPos);
+            file.read(reinterpret_cast<char*>(&block),
+                      sizeof(FileBlock));
+
+            content.append(block.b_content,
+                           sizeof(FileBlock));
+
+            blocksRead++;
+        }
     }
 
     content.resize(inode.i_size);
@@ -118,7 +157,7 @@ std::string ReadFileContent(std::fstream& file,
 }
 
 // ======================================================
-// ================= WRITE FILE (DIRECTOS) ==============
+// ================= WRITE FILE =========================
 // ======================================================
 
 bool WriteFileContent(std::fstream& file,
@@ -127,16 +166,20 @@ bool WriteFileContent(std::fstream& file,
                       Inode& inode,
                       const std::string& content)
 {
-    int blocksNeeded =
-        std::ceil((double)content.size() / sizeof(FileBlock));
+    // int blocksNeeded =
+    //     std::ceil((double)content.size() / sizeof(FileBlock));
 
-    if(blocksNeeded > 12)
+    int blocksNeeded =
+    (content.size() + sizeof(FileBlock) - 1) / sizeof(FileBlock);
+
+    if(blocksNeeded > 28) // 12 directos + 16 indirecto simple
     {
-        std::cout << "Error: Archivo excede 12 bloques directos (Fase 1)\n";
+        std::cout << "Error: Archivo excede capacidad Fase 2 (directos + simple)\n";
         return false;
     }
 
-    // Liberar bloques anteriores
+    // ================= LIBERAR BLOQUES ANTERIORES =================
+
     for(int i = 0; i < 12; i++)
     {
         if(inode.i_block[i] != -1)
@@ -146,28 +189,47 @@ bool WriteFileContent(std::fstream& file,
         }
     }
 
-    // Asignar nuevos bloques
-    for(int i = 0; i < blocksNeeded; i++)
+    if(inode.i_block[12] != -1)
+    {
+        PointerBlock pb{};
+        int pointerPos = sb.s_block_start +
+                         (inode.i_block[12] * sizeof(FileBlock));
+
+        file.seekg(pointerPos);
+        file.read(reinterpret_cast<char*>(&pb),
+                  sizeof(PointerBlock));
+
+        for(int i = 0; i < 16; i++)
+        {
+            if(pb.b_pointers[i] != -1)
+                FreeBlock(file, sb, partitionStart, pb.b_pointers[i]);
+        }
+
+        FreeBlock(file, sb, partitionStart, inode.i_block[12]);
+        inode.i_block[12] = -1;
+    }
+
+    // ================= ASIGNAR BLOQUES NUEVOS =================
+
+    int contentOffset = 0;
+
+    // ---------- DIRECTOS ----------
+    for(int i = 0; i < blocksNeeded && i < 12; i++)
     {
         int newBlock = AllocateBlock(file, sb, partitionStart);
-        if(newBlock == -1)
-        {
-            std::cout << "Error: No hay bloques disponibles\n";
-            return false;
-        }
+        if(newBlock == -1) return false;
 
         inode.i_block[i] = newBlock;
 
         FileBlock block{};
         memset(block.b_content, 0, sizeof(block.b_content));
 
-        int start = i * sizeof(FileBlock);
         int sizeToCopy =
             std::min((int)sizeof(FileBlock),
-                     (int)content.size() - start);
+                     (int)content.size() - contentOffset);
 
         memcpy(block.b_content,
-               content.c_str() + start,
+               content.c_str() + contentOffset,
                sizeToCopy);
 
         int blockPos = sb.s_block_start +
@@ -176,6 +238,58 @@ bool WriteFileContent(std::fstream& file,
         file.seekp(blockPos);
         file.write(reinterpret_cast<char*>(&block),
                    sizeof(FileBlock));
+
+        contentOffset += sizeToCopy;
+    }
+
+    // ---------- INDIRECTO SIMPLE ----------
+    if(blocksNeeded > 12)
+    {
+        int pointerBlockIndex = AllocateBlock(file, sb, partitionStart);
+        if(pointerBlockIndex == -1) return false;
+
+        inode.i_block[12] = pointerBlockIndex;
+
+        PointerBlock pb{};
+        for(int i = 0; i < 16; i++)
+            pb.b_pointers[i] = -1;
+
+        int remainingBlocks = blocksNeeded - 12;
+
+        for(int i = 0; i < remainingBlocks; i++)
+        {
+            int newBlock = AllocateBlock(file, sb, partitionStart);
+            if(newBlock == -1) return false;
+
+            pb.b_pointers[i] = newBlock;
+
+            FileBlock block{};
+            memset(block.b_content, 0, sizeof(block.b_content));
+
+            int sizeToCopy =
+                std::min((int)sizeof(FileBlock),
+                         (int)content.size() - contentOffset);
+
+            memcpy(block.b_content,
+                   content.c_str() + contentOffset,
+                   sizeToCopy);
+
+            int blockPos = sb.s_block_start +
+                           (newBlock * sizeof(FileBlock));
+
+            file.seekp(blockPos);
+            file.write(reinterpret_cast<char*>(&block),
+                       sizeof(FileBlock));
+
+            contentOffset += sizeToCopy;
+        }
+
+        int pointerPos = sb.s_block_start +
+                         (pointerBlockIndex * sizeof(FileBlock));
+
+        file.seekp(pointerPos);
+        file.write(reinterpret_cast<char*>(&pb),
+                   sizeof(PointerBlock));
     }
 
     inode.i_size = content.size();

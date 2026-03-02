@@ -13,6 +13,7 @@ add_executable(MIA_P1
     FileSystem/BlockManager.cpp
     FileSystem/CatManager.cpp
     FileSystem/MkdirManager.cpp
+    FileSystem/MkfileManager.cpp
     Auth/LoginManager.cpp
     Users/GroupManager.cpp
     Users/UserManager.cpp

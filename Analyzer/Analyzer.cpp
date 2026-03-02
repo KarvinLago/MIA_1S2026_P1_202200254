@@ -4,6 +4,7 @@
 #include "../FileSystem/MkfsManager.h"
 #include "../FileSystem/CatManager.h"
 #include "../FileSystem/MkdirManager.h"
+#include "../FileSystem/MkfileManager.h"
 #include "../Auth/LoginManager.h"
 #include "../Users/GroupManager.h"
 #include "../Users/UserManager.h"
@@ -206,6 +207,39 @@ void Analyze()
         }
 
         MkdirManager::Mkdir(params["path"], createParents);
+    }
+
+
+    // ================= MKFILE =================
+    else if(command == "mkfile"){
+        if(!params.count("path")){
+            std::cout << "Error: mkfile requiere -path\n";
+            return;
+        }
+
+        // -r no tiene valor, detectarlo directo en el string
+        bool createParents = false;
+        std::string inputLower = input;
+        std::transform(inputLower.begin(), inputLower.end(),
+                    inputLower.begin(), ::tolower);
+        if(inputLower.find(" -r ") != std::string::npos ||
+        inputLower.size() >= 2 &&
+        inputLower.substr(inputLower.size()-2) == "-r")
+        {
+            createParents = true;
+        }
+
+        int size = 0;
+        if(params.count("size")){
+            size = std::stoi(params["size"]);
+        }
+
+        std::string cont = "";
+        if(params.count("cont")){
+            cont = params["cont"];
+        }
+
+        MkfileManager::Mkfile(params["path"], createParents, size, cont);
     }
 
     // ================= CAT =================

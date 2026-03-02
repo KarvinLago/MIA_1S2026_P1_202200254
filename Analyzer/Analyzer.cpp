@@ -173,6 +173,17 @@ void Analyze()
         UserManager::Rmusr(params["user"]);
     }
 
+    // ================= CHGRP =================
+    else if(command == "chgrp"){
+        if(!params.count("user") || !params.count("grp")){
+            std::cout << "Error: chgrp requiere -user y -grp\n";
+            return;
+        }
+
+        GroupManager::Chgrp(params["user"], params["grp"]);
+    }
+
+
     // ================= CAT =================
     else if(command == "cat"){
         // Recolectar file1, file2, file3, ... fileN en orden

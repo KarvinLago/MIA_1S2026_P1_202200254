@@ -3,7 +3,8 @@
 
 namespace GroupManager {
 
-    void Mkgrp(const std::string& name);
-    void Rmgrp(const std::string& name); 
+void Mkgrp(const std::string& name);
+void Rmgrp(const std::string& name);
+void Chgrp(const std::string& user, const std::string& grp);
 
 }

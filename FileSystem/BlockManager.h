@@ -5,23 +5,31 @@
 
 namespace BlockManager {
 
-// ================= BITMAP ENGINE =================
-
-int AllocateBlock(std::fstream& file, SuperBlock& sb, int partitionStart);
-void FreeBlock(std::fstream& file, SuperBlock& sb, int partitionStart, int blockIndex);
-
+// ================= SUPERBLOCK =================
 void UpdateSuperBlock(std::fstream& file, int partitionStart, SuperBlock& sb);
 
+// ================= BITMAP BLOQUES =================
+int  AllocateBlock(std::fstream& file, SuperBlock& sb, int partitionStart);
+void FreeBlock(std::fstream& file, SuperBlock& sb, int partitionStart, int blockIndex);
+
+// ================= BITMAP INODOS =================
+int  AllocateInode(std::fstream& file, SuperBlock& sb, int partitionStart);
+void FreeInode(std::fstream& file, SuperBlock& sb, int partitionStart, int inodeIndex);
+
+// ================= INODE R/W =================
+Inode ReadInode(std::fstream& file, SuperBlock& sb, int inodeIndex);
+void  WriteInode(std::fstream& file, SuperBlock& sb, int inodeIndex, Inode& inode);
+
 // ================= FILE ENGINE =================
+std::string ReadFileContent(std::fstream& file, SuperBlock& sb, Inode& inode);
+bool        WriteFileContent(std::fstream& file, SuperBlock& sb, int partitionStart,
+                             Inode& inode, const std::string& content);
 
-std::string ReadFileContent(std::fstream& file,
-                            SuperBlock& sb,
-                            Inode& inode);
+// ================= FOLDER ENGINE =================
+// Agrega una entrada (nombre + inodoIndex) en la carpeta apuntada por folderInode.
+// Retorna true si tuvo éxito.
+bool AddEntryToFolder(std::fstream& file, SuperBlock& sb, int partitionStart,
+                      Inode& folderInode, int folderInodeIndex,
+                      const std::string& entryName, int entryInodeIndex);
 
-bool WriteFileContent(std::fstream& file,
-                      SuperBlock& sb,
-                      int partitionStart,
-                      Inode& inode,
-                      const std::string& content);
-
-}
+} // namespace BlockManager

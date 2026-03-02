@@ -3,6 +3,7 @@
 #include "../Mount/MountManager.h"
 #include "../FileSystem/MkfsManager.h"
 #include "../FileSystem/CatManager.h"
+#include "../FileSystem/MkdirManager.h"
 #include "../Auth/LoginManager.h"
 #include "../Users/GroupManager.h"
 #include "../Users/UserManager.h"
@@ -183,6 +184,29 @@ void Analyze()
         GroupManager::Chgrp(params["user"], params["grp"]);
     }
 
+
+    // ================= MKDIR =================
+    else if(command == "mkdir"){
+        if(!params.count("path")){
+            std::cout << "Error: mkdir requiere -path\n";
+            return;
+        }
+
+        bool createParents = false;
+        std::string inputLower = input;
+        std::transform(inputLower.begin(), inputLower.end(), 
+                    inputLower.begin(), ::tolower);
+        
+        if(inputLower.find(" -p ") != std::string::npos ||
+        inputLower.find(" -p\t") != std::string::npos ||
+        (inputLower.size() >= 2 && 
+            inputLower.substr(inputLower.size()-2) == "-p"))
+        {
+            createParents = true;
+        }
+
+        MkdirManager::Mkdir(params["path"], createParents);
+    }
 
     // ================= CAT =================
     else if(command == "cat"){

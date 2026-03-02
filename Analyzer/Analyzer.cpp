@@ -16,11 +16,8 @@
 
 namespace Analyzer {
 
-void Analyze()
+void AnalyzeLine(const std::string& input)
 {
-    std::string input;
-    std::getline(std::cin, input);
-
     if(input.empty()) return;
 
     std::istringstream iss(input);
@@ -267,6 +264,14 @@ void Analyze()
     else{
         std::cout << "Comando no reconocido\n";
     }
+}
+
+void Analyze()
+{
+    std::string input;
+    std::getline(std::cin, input);
+    if(input.empty()) return;
+    AnalyzeLine(input);
 }
 
 }

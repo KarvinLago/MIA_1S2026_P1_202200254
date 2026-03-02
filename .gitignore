@@ -1,3 +1,21 @@
+# Build
 build/
 *.o
 *.out
+
+# Frontend - dependencias y build
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Node modules en raíz (instalado por error)
+node_modules/
+package-lock.json
+package.json
+
+# Discos de prueba
+*.mia
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db

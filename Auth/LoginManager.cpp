@@ -2,6 +2,7 @@
 #include "../Mount/MountManager.h"
 #include "../Structs/Structs.h"
 #include "../Utilities/FileUtils.h"
+#include "../FileSystem/BlockManager.h"
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -9,120 +10,177 @@
 
 extern std::vector<MountedPartition> mountedList;
 
+// ======================================================
+// ================= SESSION STRUCT =====================
+// ======================================================
+
 struct Session {
-    bool active = false;
+    bool        active = false;
     std::string user;
     std::string id;
+    int         uid = 0;
+    int         gid = 0;
 };
 
 static Session currentSession;
 
 namespace LoginManager {
 
+// ======================================================
+// ================= LOGIN ==============================
+// ======================================================
+
 void Login(const std::string& user,
            const std::string& pass,
            const std::string& id)
 {
-    if(currentSession.active){
+    if(currentSession.active)
+    {
         std::cout << "Error: Ya existe una sesión activa\n";
         return;
     }
 
     MountedPartition* mounted = nullptr;
-
-    for(auto& m : mountedList){
-        if(m.id == id){
+    for(auto& m : mountedList)
+    {
+        if(m.id == id)
+        {
             mounted = &m;
             break;
         }
     }
 
-    if(mounted == nullptr){
+    if(!mounted)
+    {
         std::cout << "Error: ID no encontrado\n";
         return;
     }
 
     auto file = FileUtils::OpenFile(mounted->path);
-    if(!file.is_open()){
+    if(!file.is_open())
+    {
         std::cout << "Error: No se pudo abrir el disco\n";
         return;
     }
 
+    // Leer MBR
     MBR mbr{};
     file.seekg(0);
     file.read(reinterpret_cast<char*>(&mbr), sizeof(MBR));
 
     Partition* partition = nullptr;
-
-    for(int i=0;i<4;i++){
-        if(mbr.mbr_partitions[i].part_s > 0){
-            if(std::string(mbr.mbr_partitions[i].part_name) == mounted->name){
-                partition = &mbr.mbr_partitions[i];
-                break;
-            }
+    for(int i = 0; i < 4; i++)
+    {
+        if(mbr.mbr_partitions[i].part_s > 0 &&
+           std::string(mbr.mbr_partitions[i].part_name) == mounted->name)
+        {
+            partition = &mbr.mbr_partitions[i];
+            break;
         }
     }
 
-    if(partition == nullptr){
+    if(!partition)
+    {
         std::cout << "Error: Partición no encontrada\n";
         file.close();
         return;
     }
 
-    int start = partition->part_start;
-
+    // Leer SuperBlock
     SuperBlock sb{};
-    file.seekg(start);
+    file.seekg(partition->part_start);
     file.read(reinterpret_cast<char*>(&sb), sizeof(SuperBlock));
 
+    // Leer inodo de users.txt (inodo 1)
     Inode usersInode{};
     file.seekg(sb.s_inode_start + sizeof(Inode));
     file.read(reinterpret_cast<char*>(&usersInode), sizeof(Inode));
 
-    FileBlock usersBlock{};
-    file.seekg(sb.s_block_start + sizeof(FileBlock));
-    file.read(reinterpret_cast<char*>(&usersBlock), sizeof(FileBlock));
+    // Leer contenido completo con BlockManager (soporta indirectos)
+    std::string content = BlockManager::ReadFileContent(file, sb, usersInode);
 
-    std::string content(usersBlock.b_content);
+    file.close();
 
+    // Buscar usuario en users.txt
     std::stringstream ss(content);
     std::string line;
     bool valid = false;
+    int foundUid = 0;
+    int foundGid = 0;
 
-    while(std::getline(ss, line)){
+    while(std::getline(ss, line))
+    {
         if(line.empty()) continue;
 
         std::vector<std::string> tokens;
         std::stringstream ls(line);
         std::string token;
 
-        while(std::getline(ls, token, ',')){
+        while(std::getline(ls, token, ','))
             tokens.push_back(token);
-        }
 
-        if(tokens.size() == 5 && tokens[1] == "U"){
-            if(tokens[3] == user && tokens[4] == pass){
-                valid = true;
-                break;
+        // Formato: UID,U,GrupoNombre,Usuario,Contraseña
+        if(tokens.size() == 5 &&
+           tokens[1] == "U"  &&
+           tokens[0] != "0"  &&
+           tokens[3] == user &&
+           tokens[4] == pass)
+        {
+            foundUid = std::stoi(tokens[0]);
+
+            // Buscar GID del grupo al que pertenece
+            std::stringstream ss2(content);
+            std::string line2;
+            while(std::getline(ss2, line2))
+            {
+                if(line2.empty()) continue;
+
+                std::vector<std::string> t2;
+                std::stringstream ls2(line2);
+                std::string tok2;
+
+                while(std::getline(ls2, tok2, ','))
+                    t2.push_back(tok2);
+
+                // Formato grupo: GID,G,NombreGrupo
+                if(t2.size() == 3 &&
+                   t2[1] == "G"   &&
+                   t2[0] != "0"   &&
+                   t2[2] == tokens[2])
+                {
+                    foundGid = std::stoi(t2[0]);
+                    break;
+                }
             }
+
+            valid = true;
+            break;
         }
     }
 
-    if(valid){
+    if(valid)
+    {
         currentSession.active = true;
-        currentSession.user = user;
-        currentSession.id = id;
+        currentSession.user   = user;
+        currentSession.id     = id;
+        currentSession.uid    = foundUid;
+        currentSession.gid    = foundGid;
         std::cout << "Login exitoso\n";
-    } else {
+    }
+    else
+    {
         std::cout << "Error: Credenciales incorrectas\n";
     }
-
-    file.close();
 }
+
+// ======================================================
+// ================= LOGOUT =============================
+// ======================================================
 
 void Logout()
 {
-    if(!currentSession.active){
+    if(!currentSession.active)
+    {
         std::cout << "Error: No hay sesión activa\n";
         return;
     }
@@ -131,7 +189,9 @@ void Logout()
     std::cout << "Logout exitoso\n";
 }
 
-//NUEVAS FUNCIONES
+// ======================================================
+// ================= GETTERS ============================
+// ======================================================
 
 bool IsLogged()
 {
@@ -153,4 +213,14 @@ std::string GetUser()
     return currentSession.user;
 }
 
+int GetSessionUid()
+{
+    return currentSession.uid;
 }
+
+int GetSessionGid()
+{
+    return currentSession.gid;
+}
+
+} // namespace LoginManager

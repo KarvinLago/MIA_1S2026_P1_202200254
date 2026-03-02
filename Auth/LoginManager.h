@@ -3,16 +3,17 @@
 
 namespace LoginManager {
 
-    void Login(const std::string& user,
-               const std::string& pass,
-               const std::string& id);
+void Login(const std::string& user,
+           const std::string& pass,
+           const std::string& id);
 
-    void Logout();
+void Logout();
 
-    // 🔹 NUEVAS FUNCIONES
-    bool IsLogged();
-    bool IsRoot();
-    std::string GetSessionId();
-    std::string GetUser();
+bool IsLogged();
+bool IsRoot();
+std::string GetSessionId();
+std::string GetUser();
+int GetSessionUid();
+int GetSessionGid();
 
 }

@@ -2,6 +2,7 @@
 #include "../Disk/DiskManager.h"
 #include "../Mount/MountManager.h"
 #include "../FileSystem/MkfsManager.h"
+#include "../FileSystem/CatManager.h"
 #include "../Auth/LoginManager.h"
 #include "../Users/GroupManager.h"
 #include "../Users/UserManager.h"
@@ -172,8 +173,26 @@ void Analyze()
         UserManager::Rmusr(params["user"]);
     }
 
+    // ================= CAT =================
+    else if(command == "cat"){
+        // Recolectar file1, file2, file3, ... fileN en orden
+        std::vector<std::string> files;
 
+        int i = 1;
+        while(true){
+            std::string key = "file" + std::to_string(i);
+            if(!params.count(key)) break;
+            files.push_back(params[key]);
+            i++;
+        }
 
+        if(files.empty()){
+            std::cout << "Error: cat requiere al menos -file1=<ruta>\n";
+            return;
+        }
+
+        CatManager::Cat(files);
+    }
 
     // ================= COMANDO NO RECONOCIDO =================
     else{

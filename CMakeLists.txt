@@ -40,6 +40,7 @@ add_executable(MIA_P1
     Auth/LoginManager.cpp
     Users/GroupManager.cpp
     Users/UserManager.cpp
+    Reports/RepManager.cpp
 )
 
 target_include_directories(MIA_P1 PRIVATE ${CMAKE_SOURCE_DIR})

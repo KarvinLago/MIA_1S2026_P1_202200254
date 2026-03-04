@@ -8,6 +8,7 @@
 #include "../Auth/LoginManager.h"
 #include "../Users/GroupManager.h"
 #include "../Users/UserManager.h"
+#include "../Reports/RepManager.h"
 #include <iostream>
 #include <sstream>
 #include <map>
@@ -258,6 +259,16 @@ void AnalyzeLine(const std::string& input)
         }
 
         CatManager::Cat(files);
+    }
+
+    // ================= REP =================
+    else if(command == "rep"){
+        if(!params.count("name") || !params.count("path") || !params.count("id")){
+            std::cout << "Error: rep requiere -name -path -id\n";
+            return;
+        }
+        std::string pathFileLs = params.count("path_file_ls") ? params["path_file_ls"] : "";
+        RepManager::Rep(params["name"], params["path"], params["id"], pathFileLs);
     }
 
     // ================= COMANDO NO RECONOCIDO =================

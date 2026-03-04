@@ -23,6 +23,15 @@ struct MBR {
     Partition mbr_partitions[4];
 };
 
+struct EBR {
+    char    part_mount;
+    char    part_fit;
+    int32_t part_start;
+    int32_t part_s;
+    int32_t part_next;
+    char    part_name[16];
+};
+
 
 // ================= EXT2 STRUCTURES =================
 

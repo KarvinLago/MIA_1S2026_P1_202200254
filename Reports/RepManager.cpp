@@ -587,6 +587,294 @@ static void RepInode(const std::string& outPath, std::fstream& file)
 }
 
 // ======================================================
+// ================= REPORTE BLOCK ======================
+// ======================================================
+
+static void RepBlock(const std::string& outPath, std::fstream& file)
+{
+    CreateDirs(outPath);
+
+    MBR mbr{};
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(&mbr), sizeof(MBR));
+
+    // Encontrar partición EXT2
+    int partStart = -1;
+    const int EXT2_MAGIC = 0xEF53;
+    for(int i = 0; i < 4 && partStart == -1; i++){
+        if(mbr.mbr_partitions[i].part_s > 0 &&
+           mbr.mbr_partitions[i].part_type != 'e' &&
+           mbr.mbr_partitions[i].part_type != 'E'){
+            SuperBlock tmp{};
+            file.seekg(mbr.mbr_partitions[i].part_start);
+            file.read(reinterpret_cast<char*>(&tmp), sizeof(SuperBlock));
+            if(tmp.s_magic == EXT2_MAGIC) partStart = mbr.mbr_partitions[i].part_start;
+        }
+    }
+    if(partStart == -1){
+        for(int i = 0; i < 4 && partStart == -1; i++){
+            if(mbr.mbr_partitions[i].part_s > 0 &&
+               (mbr.mbr_partitions[i].part_type == 'e' || mbr.mbr_partitions[i].part_type == 'E')){
+                int ebrPos = mbr.mbr_partitions[i].part_start;
+                while(ebrPos != -1){
+                    EBR ebr{};
+                    file.seekg(ebrPos);
+                    file.read(reinterpret_cast<char*>(&ebr), sizeof(EBR));
+                    if(ebr.part_s <= 0) break;
+                    SuperBlock tmp{};
+                    file.seekg(ebr.part_start);
+                    file.read(reinterpret_cast<char*>(&tmp), sizeof(SuperBlock));
+                    if(tmp.s_magic == EXT2_MAGIC){ partStart = ebr.part_start; break; }
+                    ebrPos = ebr.part_next;
+                }
+            }
+        }
+    }
+    if(partStart == -1){ std::cout << "Error: No se encontró partición EXT2\n"; return; }
+
+    SuperBlock sb{};
+    file.seekg(partStart);
+    file.read(reinterpret_cast<char*>(&sb), sizeof(SuperBlock));
+
+    std::string dotFile = outPath + ".dot";
+    std::ofstream dot(dotFile);
+    if(!dot.is_open()){ std::cout << "Error: No se pudo crear archivo dot\n"; return; }
+
+    const std::string HDR_FOLDER  = "#1e8449";  // verde carpeta
+    const std::string HDR_FILE    = "#1a5276";  // azul archivo
+    const std::string HDR_PTR     = "#7d3c98";  // morado apuntadores
+    const std::string ROW1        = "#ffffff";
+    const std::string ROW2_FOLDER = "#d5f5e3";
+    const std::string ROW2_FILE   = "#d6eaf8";
+    const std::string ROW2_PTR    = "#e8d5f0";
+    const std::string FONT        = "#1a1a1a";
+
+    dot << "digraph G {\n";
+    dot << "  graph [bgcolor=white rankdir=LR]\n";
+    dot << "  node [shape=none margin=0]\n\n";
+
+    // Conjunto de bloques ya procesados para no repetir
+    std::vector<bool> rendered(sb.s_blocks_count, false);
+
+    bool anyBlock   = false;
+    std::string prevNode = "";
+
+    // Recorrer inodos usados
+    for(int idx = 0; idx < sb.s_inodes_count; idx++){
+        file.seekg(sb.s_bm_inode_start + idx);
+        char bm = 0;
+        file.read(&bm, 1);
+        if(bm != '1') continue;
+
+        Inode inode{};
+        file.seekg(sb.s_inode_start + idx * sizeof(Inode));
+        file.read(reinterpret_cast<char*>(&inode), sizeof(Inode));
+
+        bool isFolder = (inode.i_type == 0);
+        bool isFile   = (inode.i_type == 1);
+
+        // Lambda para emitir nodo de bloque carpeta
+        auto emitFolderBlock = [&](int blockIdx){
+            if(blockIdx < 0 || blockIdx >= sb.s_blocks_count) return;
+            if(rendered[blockIdx]) return;
+            rendered[blockIdx] = true;
+            anyBlock = true;
+
+            FolderBlock fb{};
+            file.seekg(sb.s_block_start + blockIdx * (int)sizeof(FileBlock));
+            file.read(reinterpret_cast<char*>(&fb), sizeof(FolderBlock));
+
+            std::string nName = "block_" + std::to_string(blockIdx);
+            dot << "  " << nName << " [label=<\n";
+            dot << "  <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"4\" "
+                << "BGCOLOR=\"white\" COLOR=\"#aaaaaa\" WIDTH=\"220\">\n";
+            dot << "    <TR><TD COLSPAN=\"2\" BGCOLOR=\"" << HDR_FOLDER
+                << "\" ALIGN=\"CENTER\" CELLPADDING=\"6\">"
+                << "<FONT COLOR=\"white\"><B>Bloque Carpeta " << blockIdx
+                << "</B></FONT></TD></TR>\n";
+            // Header columnas
+            dot << "    <TR>"
+                << "<TD BGCOLOR=\"" << ROW2_FOLDER << "\" ALIGN=\"CENTER\"><FONT COLOR=\"" << FONT << "\"><B>b_name</B></FONT></TD>"
+                << "<TD BGCOLOR=\"" << ROW2_FOLDER << "\" ALIGN=\"CENTER\"><FONT COLOR=\"" << FONT << "\"><B>b_inodo</B></FONT></TD>"
+                << "</TR>\n";
+            for(int e = 0; e < 4; e++){
+                std::string bg = (e % 2 == 0) ? ROW1 : ROW2_FOLDER;
+                std::string bname = (fb.b_content[e].b_name[0] != '\0')
+                                    ? std::string(fb.b_content[e].b_name) : "-";
+                std::string binodo = (fb.b_content[e].b_inodo != -1)
+                                     ? std::to_string(fb.b_content[e].b_inodo) : "-1";
+                dot << "    <TR>"
+                    << "<TD BGCOLOR=\"" << bg << "\" ALIGN=\"LEFT\" CELLPADDING=\"3\">"
+                    << "<FONT COLOR=\"" << FONT << "\">" << bname << "</FONT></TD>"
+                    << "<TD BGCOLOR=\"" << bg << "\" ALIGN=\"RIGHT\" CELLPADDING=\"3\">"
+                    << "<FONT COLOR=\"" << FONT << "\">" << binodo << "</FONT></TD>"
+                    << "</TR>\n";
+            }
+            dot << "  </TABLE>>]\n\n";
+
+            if(!prevNode.empty())
+                dot << "  " << prevNode << " -> " << nName << " [color=\"#27ae60\" penwidth=1.5]\n\n";
+            prevNode = nName;
+        };
+
+        // Lambda para emitir nodo de bloque archivo
+        auto emitFileBlock = [&](int blockIdx){
+            if(blockIdx < 0 || blockIdx >= sb.s_blocks_count) return;
+            if(rendered[blockIdx]) return;
+            rendered[blockIdx] = true;
+            anyBlock = true;
+
+            FileBlock fb{};
+            file.seekg(sb.s_block_start + blockIdx * (int)sizeof(FileBlock));
+            file.read(reinterpret_cast<char*>(&fb), sizeof(FileBlock));
+
+            // Sanitizar contenido para HTML
+            std::string content;
+            for(int c = 0; c < (int)sizeof(fb.b_content); c++){
+                char ch = fb.b_content[c];
+                if(ch == '\0') break;
+                if(ch == '<') content += "&lt;";
+                else if(ch == '>') content += "&gt;";
+                else if(ch == '&') content += "&amp;";
+                else if(ch == '"') content += "&quot;";
+                else content += ch;
+            }
+            if(content.empty()) content = "(vacío)";
+
+            std::string nName = "block_" + std::to_string(blockIdx);
+            dot << "  " << nName << " [label=<\n";
+            dot << "  <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"4\" "
+                << "BGCOLOR=\"white\" COLOR=\"#aaaaaa\" WIDTH=\"220\">\n";
+            dot << "    <TR><TD BGCOLOR=\"" << HDR_FILE
+                << "\" ALIGN=\"CENTER\" CELLPADDING=\"6\">"
+                << "<FONT COLOR=\"white\"><B>Bloque Archivo " << blockIdx
+                << "</B></FONT></TD></TR>\n";
+            dot << "    <TR><TD BGCOLOR=\"" << ROW2_FILE
+                << "\" ALIGN=\"LEFT\" CELLPADDING=\"4\">"
+                << "<FONT COLOR=\"" << FONT << "\" POINT-SIZE=\"9\">" << content
+                << "</FONT></TD></TR>\n";
+            dot << "  </TABLE>>]\n\n";
+
+            if(!prevNode.empty())
+                dot << "  " << prevNode << " -> " << nName << " [color=\"#2980b9\" penwidth=1.5]\n\n";
+            prevNode = nName;
+        };
+
+        // Lambda para emitir nodo de bloque apuntadores
+        auto emitPtrBlock = [&](int blockIdx){
+            if(blockIdx < 0 || blockIdx >= sb.s_blocks_count) return;
+            if(rendered[blockIdx]) return;
+            rendered[blockIdx] = true;
+            anyBlock = true;
+
+            PointerBlock pb{};
+            file.seekg(sb.s_block_start + blockIdx * (int)sizeof(FileBlock));
+            file.read(reinterpret_cast<char*>(&pb), sizeof(PointerBlock));
+
+            std::string nName = "block_" + std::to_string(blockIdx);
+            dot << "  " << nName << " [label=<\n";
+            dot << "  <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"4\" "
+                << "BGCOLOR=\"white\" COLOR=\"#aaaaaa\" WIDTH=\"220\">\n";
+            dot << "    <TR><TD BGCOLOR=\"" << HDR_PTR
+                << "\" ALIGN=\"CENTER\" CELLPADDING=\"6\">"
+                << "<FONT COLOR=\"white\"><B>Bloque Apuntadores " << blockIdx
+                << "</B></FONT></TD></TR>\n";
+
+            std::string ptrs;
+            for(int p = 0; p < 16; p++){
+                ptrs += std::to_string(pb.b_pointers[p]);
+                if(p < 15) ptrs += ", ";
+            }
+            dot << "    <TR><TD BGCOLOR=\"" << ROW2_PTR
+                << "\" ALIGN=\"LEFT\" CELLPADDING=\"4\">"
+                << "<FONT COLOR=\"" << FONT << "\" POINT-SIZE=\"9\">" << ptrs
+                << "</FONT></TD></TR>\n";
+            dot << "  </TABLE>>]\n\n";
+
+            if(!prevNode.empty())
+                dot << "  " << prevNode << " -> " << nName << " [color=\"#8e44ad\" penwidth=1.5]\n\n";
+            prevNode = nName;
+        };
+
+        if(isFolder){
+            for(int b = 0; b < 12; b++){
+                if(inode.i_block[b] == -1) break;
+                emitFolderBlock(inode.i_block[b]);
+            }
+        } else if(isFile){
+            // Directos
+            for(int b = 0; b < 12; b++){
+                if(inode.i_block[b] == -1) break;
+                emitFileBlock(inode.i_block[b]);
+            }
+            // Simple indirecto
+            if(inode.i_block[12] != -1){
+                emitPtrBlock(inode.i_block[12]);
+                PointerBlock pb{};
+                file.seekg(sb.s_block_start + inode.i_block[12] * (int)sizeof(FileBlock));
+                file.read(reinterpret_cast<char*>(&pb), sizeof(PointerBlock));
+                for(int p = 0; p < 16; p++){
+                    if(pb.b_pointers[p] == -1) break;
+                    emitFileBlock(pb.b_pointers[p]);
+                }
+            }
+            // Doble indirecto
+            if(inode.i_block[13] != -1){
+                emitPtrBlock(inode.i_block[13]);
+                PointerBlock l1{};
+                file.seekg(sb.s_block_start + inode.i_block[13] * (int)sizeof(FileBlock));
+                file.read(reinterpret_cast<char*>(&l1), sizeof(PointerBlock));
+                for(int i = 0; i < 16; i++){
+                    if(l1.b_pointers[i] == -1) break;
+                    emitPtrBlock(l1.b_pointers[i]);
+                    PointerBlock l2{};
+                    file.seekg(sb.s_block_start + l1.b_pointers[i] * (int)sizeof(FileBlock));
+                    file.read(reinterpret_cast<char*>(&l2), sizeof(PointerBlock));
+                    for(int j = 0; j < 16; j++){
+                        if(l2.b_pointers[j] == -1) break;
+                        emitFileBlock(l2.b_pointers[j]);
+                    }
+                }
+            }
+            // Triple indirecto
+            if(inode.i_block[14] != -1){
+                emitPtrBlock(inode.i_block[14]);
+                PointerBlock l1{};
+                file.seekg(sb.s_block_start + inode.i_block[14] * (int)sizeof(FileBlock));
+                file.read(reinterpret_cast<char*>(&l1), sizeof(PointerBlock));
+                for(int i = 0; i < 16; i++){
+                    if(l1.b_pointers[i] == -1) break;
+                    emitPtrBlock(l1.b_pointers[i]);
+                    PointerBlock l2{};
+                    file.seekg(sb.s_block_start + l1.b_pointers[i] * (int)sizeof(FileBlock));
+                    file.read(reinterpret_cast<char*>(&l2), sizeof(PointerBlock));
+                    for(int j = 0; j < 16; j++){
+                        if(l2.b_pointers[j] == -1) break;
+                        emitPtrBlock(l2.b_pointers[j]);
+                        PointerBlock l3{};
+                        file.seekg(sb.s_block_start + l2.b_pointers[j] * (int)sizeof(FileBlock));
+                        file.read(reinterpret_cast<char*>(&l3), sizeof(PointerBlock));
+                        for(int k = 0; k < 16; k++){
+                            if(l3.b_pointers[k] == -1) break;
+                            emitFileBlock(l3.b_pointers[k]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if(!anyBlock)
+        dot << "  empty [label=\"No hay bloques utilizados\" shape=box]\n";
+
+    dot << "}\n";
+    dot.close();
+
+    RunDot(dotFile, outPath);
+    std::cout << "Reporte block generado: " << outPath << "\n";
+}
+
+// ======================================================
 // ================= REP (dispatcher) ===================
 // ======================================================
 
@@ -610,6 +898,8 @@ void Rep(const std::string& name,
         RepDisk(path, file, mounted->path);
     } else if(name == "inode"){
         RepInode(path, file);
+    } else if(name == "block"){
+        RepBlock(path, file);
     } else {
         std::cout << "Reporte '" << name << "' aún no implementado\n";
     }

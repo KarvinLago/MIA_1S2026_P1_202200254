@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <algorithm>
+#include <iomanip>
 #include <sys/stat.h>
 
 extern std::vector<MountedPartition> mountedList;
@@ -157,11 +158,7 @@ static void RepMbr(const std::string& outPath, std::fstream& file)
         if(p.part_s <= 0) continue;
 
         header(dot, HDR_PRIM, "Particion");
-        // row(dot, "part_status", std::string(1, p.part_status), false, ROW1, ROW2);
-        bool isMounted = false;
-        for(const auto& m : mountedList)
-            if(m.name == std::string(p.part_name)) isMounted = true;
-        row(dot, "part_status", isMounted ? "1" : std::string(1, p.part_status), false, ROW1, ROW2);
+        row(dot, "part_status", std::string(1, p.part_status), false, ROW1, ROW2);
         row(dot, "part_type",   std::string(1, p.part_type),   true,  ROW1, ROW2);
         row(dot, "part_fit",    std::string(1, p.part_fit),    false, ROW1, ROW2);
         row(dot, "part_start",  std::to_string(p.part_start),  true,  ROW1, ROW2);
@@ -178,11 +175,7 @@ static void RepMbr(const std::string& outPath, std::fstream& file)
                 if(ebr.part_s <= 0) break;
 
                 header(dot, HDR_LOG, "Particion Logica");
-                // row(dot, "part_status", std::string(1, ebr.part_mount), false, LOG1, LOG2);
-                bool ebrMounted = false;
-                for(const auto& m : mountedList)
-                    if(m.name == std::string(ebr.part_name)) ebrMounted = true;
-                row(dot, "part_status", ebrMounted ? "1" : std::string(1, ebr.part_mount), false, LOG1, LOG2);
+                row(dot, "part_status", std::string(1, ebr.part_mount), false, LOG1, LOG2);
                 row(dot, "part_next",   std::to_string(ebr.part_next),  true,  LOG1, LOG2);
                 row(dot, "part_fit",    std::string(1, ebr.part_fit),   false, LOG1, LOG2);
                 row(dot, "part_start",  std::to_string(ebr.part_start), true,  LOG1, LOG2);
@@ -219,11 +212,7 @@ static void RepMbr(const std::string& outPath, std::fstream& file)
                 if(ebr.part_s <= 0) break;
 
                 header(dot, HDR_PRIM, "Particion");
-                // row(dot, "part_status", std::string(1, ebr.part_mount), false, ROW1, ROW2);
-                bool ebrMounted2 = false;
-                for(const auto& m : mountedList)
-                    if(m.name == std::string(ebr.part_name)) ebrMounted2 = true;
-                row(dot, "part_status", ebrMounted2 ? "1" : std::string(1, ebr.part_mount), false, ROW1, ROW2);
+                row(dot, "part_status", std::string(1, ebr.part_mount), false, ROW1, ROW2);
                 row(dot, "part_type",   "p",                            true,  ROW1, ROW2);
                 row(dot, "part_fit",    std::string(1, ebr.part_fit),   false, ROW1, ROW2);
                 row(dot, "part_start",  std::to_string(ebr.part_start), true,  ROW1, ROW2);
@@ -246,6 +235,191 @@ static void RepMbr(const std::string& outPath, std::fstream& file)
 }
 
 // ======================================================
+// ================= REPORTE DISK =======================
+// ======================================================
+
+static void RepDisk(const std::string& outPath, std::fstream& file,
+                    const std::string& diskPath)
+{
+    CreateDirs(outPath);
+
+    MBR mbr{};
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(&mbr), sizeof(MBR));
+
+    std::string dotFile = outPath + ".dot";
+    std::ofstream dot(dotFile);
+    if(!dot.is_open()){ std::cout << "Error: No se pudo crear archivo dot\n"; return; }
+
+    int totalSize = mbr.mbr_tamano;
+
+    // Nombre real del disco y tamaño
+    std::string diskName = diskPath.substr(diskPath.find_last_of('/') + 1);
+    double diskMB = (double)totalSize / (1024.0 * 1024.0);
+    std::ostringstream ssMB;
+    ssMB << std::fixed << std::setprecision(0) << diskMB << " MB";
+
+    const std::string COLOR_MBR      = "#4a235a";
+    const std::string COLOR_PRIMARY  = "#7d3c98";
+    const std::string COLOR_EXTENDED = "#d5d8dc";
+    const std::string COLOR_EBR      = "#a9cce3";
+    const std::string COLOR_LOGICAL  = "#a9dfbf";
+    const std::string COLOR_FREE     = "#f9e79f";
+    const std::string FONT_DARK      = "#1a1a1a";
+
+    auto pct = [&](int size) -> std::string {
+        double p = (double)size / totalSize * 100.0;
+        std::ostringstream ss;
+        ss << std::fixed << std::setprecision(2) << p << "%";
+        return ss.str();
+    };
+
+    // Recolectar particiones ordenadas por start
+    std::vector<Partition> parts;
+    for(int i = 0; i < 4; i++)
+        if(mbr.mbr_partitions[i].part_s > 0)
+            parts.push_back(mbr.mbr_partitions[i]);
+    std::sort(parts.begin(), parts.end(),
+              [](const Partition& a, const Partition& b){ return a.part_start < b.part_start; });
+
+    struct Segment {
+        std::string type; // "primary","extended","free"
+        std::string name;
+        int start, size;
+    };
+
+    std::vector<Segment> segments;
+    int cursor = sizeof(MBR);
+
+    for(const Partition& p : parts){
+        if(p.part_start > cursor)
+            segments.push_back({"free","Libre", cursor, p.part_start - cursor});
+        if(p.part_type == 'e' || p.part_type == 'E')
+            segments.push_back({"extended", std::string(p.part_name), p.part_start, p.part_s});
+        else
+            segments.push_back({"primary",  std::string(p.part_name), p.part_start, p.part_s});
+        cursor = p.part_start + p.part_s;
+    }
+    if(cursor < totalSize)
+        segments.push_back({"free","Libre", cursor, totalSize - cursor});
+
+    const int TOTAL_WIDTH = 800;
+    const int MBR_WIDTH   = 40;
+    int usableWidth = TOTAL_WIDTH - MBR_WIDTH;
+    int usableSize  = totalSize - (int)sizeof(MBR);
+
+    dot << "digraph G {\n";
+    dot << "  graph [bgcolor=white]\n";
+    dot << "  node [shape=none margin=0]\n\n";
+    dot << "  disk [label=<\n";
+    dot << "  <TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"2\" CELLPADDING=\"0\">\n";
+
+    // Título
+    dot << "    <TR><TD COLSPAN=\"100\" ALIGN=\"CENTER\" CELLPADDING=\"8\">"
+        << "<FONT COLOR=\"" << FONT_DARK << "\" POINT-SIZE=\"14\"><B>"
+        << diskName << "</B><BR/>"
+        << "<FONT POINT-SIZE=\"10\">" << ssMB.str() << "</FONT>"
+        << "</FONT></TD></TR>\n";
+
+    dot << "    <TR>\n";
+
+    // MBR
+    dot << "      <TD BGCOLOR=\"" << COLOR_MBR << "\" WIDTH=\"" << MBR_WIDTH << "\" HEIGHT=\"80\" "
+        << "BORDER=\"1\" ALIGN=\"CENTER\" VALIGN=\"MIDDLE\" CELLPADDING=\"4\">"
+        << "<FONT COLOR=\"white\"><B>MBR</B></FONT></TD>\n";
+
+    for(const Segment& seg : segments){
+        int w = std::max(35, (int)((double)seg.size / usableSize * usableWidth));
+
+        if(seg.type == "free"){
+            dot << "      <TD BGCOLOR=\"" << COLOR_FREE << "\" WIDTH=\"" << w << "\" HEIGHT=\"80\" "
+                << "BORDER=\"1\" ALIGN=\"CENTER\" VALIGN=\"MIDDLE\" CELLPADDING=\"4\">"
+                << "<FONT COLOR=\"" << FONT_DARK << "\"><B>Libre</B><BR/>"
+                << "<FONT POINT-SIZE=\"9\">" << pct(seg.size) << " del disco</FONT></FONT></TD>\n";
+
+        } else if(seg.type == "primary"){
+            bool mounted = false;
+            for(const auto& m : mountedList) if(m.name == seg.name) mounted = true;
+            std::string color = mounted ? "#1a5276" : COLOR_PRIMARY;
+            std::string extra = mounted ? "<BR/><FONT POINT-SIZE=\"8\">● Montada</FONT>" : "";
+            dot << "      <TD BGCOLOR=\"" << color << "\" WIDTH=\"" << w << "\" HEIGHT=\"80\" "
+                << "BORDER=\"" << (mounted ? "3" : "1") << "\" "
+                << "COLOR=\"" << (mounted ? "#27ae60" : "#333333") << "\" "
+                << "ALIGN=\"CENTER\" VALIGN=\"MIDDLE\" CELLPADDING=\"4\">"
+                << "<FONT COLOR=\"white\"><B>" << seg.name << "</B><BR/>"
+                << "<FONT POINT-SIZE=\"9\">" << pct(seg.size) << " del disco</FONT>"
+                << extra << "</FONT></TD>\n";
+
+        } else if(seg.type == "extended"){
+            // Contenedor extendida con tabla anidada
+            dot << "      <TD BGCOLOR=\"" << COLOR_EXTENDED << "\" WIDTH=\"" << w << "\" "
+                << "BORDER=\"1\" CELLPADDING=\"3\" VALIGN=\"TOP\">\n";
+            dot << "        <TABLE BORDER=\"0\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\">\n";
+
+            // Título extendida
+            dot << "          <TR><TD COLSPAN=\"100\" ALIGN=\"CENTER\" CELLPADDING=\"2\">"
+                << "<FONT COLOR=\"" << FONT_DARK << "\" POINT-SIZE=\"10\"><B>"
+                << seg.name << "</B></FONT></TD></TR>\n";
+            dot << "          <TR>\n";
+
+            int extEnd    = seg.start + seg.size;
+            int extCursor = seg.start;
+            int innerW    = w - 6;
+            int ebrPos    = seg.start;
+
+            while(ebrPos != -1 && ebrPos >= seg.start && ebrPos < extEnd){
+                EBR ebr{};
+                file.seekg(ebrPos);
+                file.read(reinterpret_cast<char*>(&ebr), sizeof(EBR));
+                if(ebr.part_s <= 0) break;
+
+                // EBR
+                int ebrW = std::max(20, (int)((double)sizeof(EBR) / seg.size * innerW));
+                dot << "          <TD BGCOLOR=\"" << COLOR_EBR << "\" WIDTH=\"" << ebrW << "\" HEIGHT=\"50\" "
+                    << "BORDER=\"1\" ALIGN=\"CENTER\" VALIGN=\"MIDDLE\" CELLPADDING=\"2\">"
+                    << "<FONT COLOR=\"" << FONT_DARK << "\" POINT-SIZE=\"9\"><B>EBR</B></FONT></TD>\n";
+
+                // Lógica
+                int logW = std::max(30, (int)((double)ebr.part_s / seg.size * innerW));
+                bool logMounted = false;
+                for(const auto& m : mountedList) if(m.name == std::string(ebr.part_name)) logMounted = true;
+                std::string logColor = logMounted ? "#1e8449" : COLOR_LOGICAL;
+                dot << "          <TD BGCOLOR=\"" << logColor << "\" WIDTH=\"" << logW << "\" HEIGHT=\"50\" "
+                    << "BORDER=\"1\" ALIGN=\"CENTER\" VALIGN=\"MIDDLE\" CELLPADDING=\"2\">"
+                    << "<FONT COLOR=\"" << FONT_DARK << "\" POINT-SIZE=\"9\"><B>"
+                    << std::string(ebr.part_name) << "</B><BR/>"
+                    << pct(ebr.part_s) << " del Disco</FONT></TD>\n";
+
+                extCursor = ebr.part_start + ebr.part_s;
+                ebrPos = ebr.part_next;
+            }
+
+            // Libre interno
+            if(extCursor < extEnd){
+                int freeSize = extEnd - extCursor;
+                int freeW = std::max(20, (int)((double)freeSize / seg.size * innerW));
+                dot << "          <TD BGCOLOR=\"#fdfefe\" WIDTH=\"" << freeW << "\" HEIGHT=\"50\" "
+                    << "BORDER=\"1\" ALIGN=\"CENTER\" VALIGN=\"MIDDLE\" CELLPADDING=\"2\">"
+                    << "<FONT COLOR=\"" << FONT_DARK << "\" POINT-SIZE=\"9\"><B>Libre</B><BR/>"
+                    << pct(freeSize) << "</FONT></TD>\n";
+            }
+
+            dot << "          </TR>\n";
+            dot << "        </TABLE>\n";
+            dot << "      </TD>\n";
+        }
+    }
+
+    dot << "    </TR>\n";
+    dot << "  </TABLE>>]\n";
+    dot << "}\n";
+    dot.close();
+
+    RunDot(dotFile, outPath);
+    std::cout << "Reporte disk generado: " << outPath << "\n";
+}
+
+// ======================================================
 // ================= REP (dispatcher) ===================
 // ======================================================
 
@@ -254,7 +428,6 @@ void Rep(const std::string& name,
          const std::string& id,
          const std::string& pathFileLs)
 {
-    // Buscar partición montada
     MountedPartition* mounted = nullptr;
     for(auto& m : mountedList)
         if(m.id == id){ mounted = &m; break; }
@@ -266,6 +439,8 @@ void Rep(const std::string& name,
 
     if(name == "mbr"){
         RepMbr(path, file);
+    } else if(name == "disk"){
+        RepDisk(path, file, mounted->path);
     } else {
         std::cout << "Reporte '" << name << "' aún no implementado\n";
     }

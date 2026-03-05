@@ -420,6 +420,173 @@ static void RepDisk(const std::string& outPath, std::fstream& file,
 }
 
 // ======================================================
+// ================= REPORTE INODE ======================
+// ======================================================
+
+static void RepInode(const std::string& outPath, std::fstream& file)
+{
+    CreateDirs(outPath);
+
+    // Leer SuperBlock
+    SuperBlock sb{};
+    // Necesitamos el partStart — lo leemos desde el archivo que ya está abierto en la partición
+    // El caller ya posicionó; leemos desde inicio del archivo buscando el SB
+    // En realidad el dispatcher pasa el file abierto desde el inicio del disco,
+    // así que necesitamos leer el MBR para encontrar el start de la partición montada.
+    // Usamos el mismo patrón que otros reportes: el file está abierto desde inicio del disco.
+
+    std::string dotFile = outPath + ".dot";
+    std::ofstream dot(dotFile);
+    if(!dot.is_open()){ std::cout << "Error: No se pudo crear archivo dot\n"; return; }
+
+    // Leer MBR para encontrar partStart (ya viene posicionado en el file del dispatcher)
+    // El dispatcher reabre el disco desde el path montado, así que podemos leer MBR
+    MBR mbr{};
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(&mbr), sizeof(MBR));
+
+    // Buscar partStart usando mountedList (tomamos el primer montado que coincida con este file)
+    // El dispatcher ya filtró por ID, así que leemos el SB desde la partición activa
+    // Para obtener partStart usamos FileUtils pattern: buscamos en MBR y EBR
+    // Como no tenemos el nombre aquí, leemos todos los SB posibles buscando magic number
+    int partStart = -1;
+    const int EXT2_MAGIC = 0xEF53;
+
+    // Buscar en primarias
+    for(int i = 0; i < 4; i++){
+        if(mbr.mbr_partitions[i].part_s > 0 &&
+           mbr.mbr_partitions[i].part_type != 'e' &&
+           mbr.mbr_partitions[i].part_type != 'E'){
+            SuperBlock tmp{};
+            file.seekg(mbr.mbr_partitions[i].part_start);
+            file.read(reinterpret_cast<char*>(&tmp), sizeof(SuperBlock));
+            if(tmp.s_magic == EXT2_MAGIC){ partStart = mbr.mbr_partitions[i].part_start; break; }
+        }
+    }
+    // Buscar en lógicas si no encontró
+    if(partStart == -1){
+        for(int i = 0; i < 4; i++){
+            if(mbr.mbr_partitions[i].part_s > 0 &&
+               (mbr.mbr_partitions[i].part_type == 'e' || mbr.mbr_partitions[i].part_type == 'E')){
+                int ebrPos = mbr.mbr_partitions[i].part_start;
+                while(ebrPos != -1){
+                    EBR ebr{};
+                    file.seekg(ebrPos);
+                    file.read(reinterpret_cast<char*>(&ebr), sizeof(EBR));
+                    if(ebr.part_s <= 0) break;
+                    SuperBlock tmp{};
+                    file.seekg(ebr.part_start);
+                    file.read(reinterpret_cast<char*>(&tmp), sizeof(SuperBlock));
+                    if(tmp.s_magic == EXT2_MAGIC){ partStart = ebr.part_start; break; }
+                    ebrPos = ebr.part_next;
+                }
+                break;
+            }
+        }
+    }
+
+    if(partStart == -1){ std::cout << "Error: No se encontró partición EXT2\n"; dot.close(); return; }
+
+    file.seekg(partStart);
+    file.read(reinterpret_cast<char*>(&sb), sizeof(SuperBlock));
+
+    // Colores
+    const std::string HDR   = "#1a5276";
+    const std::string ROW1  = "#ffffff";
+    const std::string ROW2  = "#d6eaf8";
+    const std::string FONT  = "#1a1a1a";
+
+    auto timeStr = [](time_t t) -> std::string {
+        if(t <= 0) return "N/A";
+        char buf[32];
+        struct tm* tm_info = localtime(&t);
+        strftime(buf, sizeof(buf), "%d/%m/%Y %H:%M", tm_info);
+        return std::string(buf);
+    };
+
+    auto row = [&](std::ofstream& d, const std::string& key, const std::string& val, bool even){
+        std::string bg = even ? ROW2 : ROW1;
+        d << "    <TR>"
+          << "<TD BGCOLOR=\"" << bg << "\" ALIGN=\"RIGHT\" CELLPADDING=\"4\">"
+          << "<FONT COLOR=\"" << FONT << "\">" << key << "</FONT></TD>"
+          << "<TD BGCOLOR=\"" << bg << "\" ALIGN=\"LEFT\" CELLPADDING=\"4\">"
+          << "<FONT COLOR=\"" << FONT << "\">" << val << "</FONT></TD>"
+          << "</TR>\n";
+    };
+
+    dot << "digraph G {\n";
+    dot << "  graph [bgcolor=white rankdir=LR]\n";
+    dot << "  node [shape=none margin=0]\n\n";
+
+    // Recorrer todos los inodos usados
+    int totalInodes = sb.s_inodes_count;
+    bool anyInode = false;
+    std::string prevNode = "";
+
+    for(int idx = 0; idx < totalInodes; idx++){
+        // Leer bitmap de inodos
+        file.seekg(sb.s_bm_inode_start + idx);
+        char bm = 0;
+        file.read(&bm, 1);
+        if(bm != '1') continue; // no usado
+
+        // Leer inodo
+        Inode inode{};
+        file.seekg(sb.s_inode_start + idx * sizeof(Inode));
+        file.read(reinterpret_cast<char*>(&inode), sizeof(Inode));
+
+        std::string nodeName = "inode_" + std::to_string(idx);
+        anyInode = true;
+
+        dot << "  " << nodeName << " [label=<\n";
+        dot << "  <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"4\" "
+            << "BGCOLOR=\"white\" COLOR=\"#aaaaaa\" WIDTH=\"260\">\n";
+
+        // Header
+        dot << "    <TR><TD COLSPAN=\"2\" BGCOLOR=\"" << HDR << "\" ALIGN=\"CENTER\" CELLPADDING=\"6\">"
+            << "<FONT COLOR=\"white\"><B>Inodo " << idx << "</B></FONT></TD></TR>\n";
+
+        row(dot, "i_uid",   std::to_string(inode.i_uid),  false);
+        row(dot, "i_gid",   std::to_string(inode.i_gid),  true);
+        row(dot, "i_size",  std::to_string(inode.i_size), false);
+        row(dot, "i_atime", timeStr(inode.i_atime),        true);
+        row(dot, "i_ctime", timeStr(inode.i_ctime),        false);
+        row(dot, "i_mtime", timeStr(inode.i_mtime),        true);
+        // Sanitizar i_type: si es null o no imprimible, mostrar descripción
+        std::string typeStr;
+        if(inode.i_type == '0' || inode.i_type == 0)       typeStr = "0 (carpeta)";
+        else if(inode.i_type == '1' || inode.i_type == 1)  typeStr = "1 (archivo)";
+        else typeStr = std::string(1, inode.i_type);
+        row(dot, "i_type",  typeStr,  false);
+        row(dot, "i_perm",  std::to_string(inode.i_perm),  true);
+
+        // Bloques usados
+        for(int b = 0; b < 15; b++){
+            if(inode.i_block[b] == -1) break;
+            row(dot, "i_block[" + std::to_string(b) + "]",
+                std::to_string(inode.i_block[b]), b % 2 == 0);
+        }
+
+        dot << "  </TABLE>>]\n\n";
+
+        // Flecha al anterior
+        if(!prevNode.empty())
+            dot << "  " << prevNode << " -> " << nodeName << " [color=\"#2980b9\" penwidth=1.5]\n\n";
+
+        prevNode = nodeName;
+    }
+
+    if(!anyInode)
+        dot << "  empty [label=\"No hay inodos utilizados\" shape=box]\n";
+
+    dot << "}\n";
+    dot.close();
+
+    RunDot(dotFile, outPath);
+    std::cout << "Reporte inode generado: " << outPath << "\n";
+}
+
+// ======================================================
 // ================= REP (dispatcher) ===================
 // ======================================================
 
@@ -441,6 +608,8 @@ void Rep(const std::string& name,
         RepMbr(path, file);
     } else if(name == "disk"){
         RepDisk(path, file, mounted->path);
+    } else if(name == "inode"){
+        RepInode(path, file);
     } else {
         std::cout << "Reporte '" << name << "' aún no implementado\n";
     }

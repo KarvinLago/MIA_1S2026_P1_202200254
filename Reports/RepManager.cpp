@@ -994,6 +994,266 @@ static void RepBmBlock(const std::string& outPath, std::fstream& file)
 }
 
 // ======================================================
+// ================= REPORTE TREE =======================
+// ======================================================
+
+static void RepTreeVisit(std::ofstream& dot, std::fstream& file, SuperBlock& sb,
+                         int inodeIdx, const std::string& inodePath,
+                         std::vector<bool>& visitedInodes);
+
+static void RepTreeEmitBlock(std::ofstream& dot, std::fstream& file, SuperBlock& sb,
+                             int blockIdx, bool isFolder,
+                             std::vector<bool>& visitedInodes,
+                             const std::string& parentNode)
+{
+    if(blockIdx < 0 || blockIdx >= sb.s_blocks_count) return;
+    std::string bNode = "tb_" + std::to_string(blockIdx);
+
+    if(isFolder){
+        FolderBlock fb{};
+        file.seekg(sb.s_block_start + blockIdx * (int)sizeof(FileBlock));
+        file.read(reinterpret_cast<char*>(&fb), sizeof(FolderBlock));
+
+        dot << "  " << bNode << " [label=<\n";
+        dot << "  <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"3\" "
+            << "BGCOLOR=\"#f1948a\" COLOR=\"#922b21\" WIDTH=\"160\">\n";
+        dot << "    <TR><TD COLSPAN=\"2\" BGCOLOR=\"#e74c3c\" ALIGN=\"CENTER\" CELLPADDING=\"4\">"
+            << "<FONT COLOR=\"white\" POINT-SIZE=\"9\"><B>b. carpetas " << blockIdx
+            << "</B></FONT></TD></TR>\n";
+        for(int e = 0; e < 4; e++){
+            std::string bg = (e%2==0) ? "#ffffff" : "#f9ebea";
+            std::string bn = (fb.b_content[e].b_name[0] != '\0')
+                             ? std::string(fb.b_content[e].b_name) : "-";
+            std::string bi = (fb.b_content[e].b_inodo != -1)
+                             ? std::to_string(fb.b_content[e].b_inodo) : "-1";
+            dot << "    <TR>"
+                << "<TD BGCOLOR=\"" << bg << "\" ALIGN=\"LEFT\" CELLPADDING=\"2\" PORT=\"e" << e << "\">"
+                << "<FONT POINT-SIZE=\"8\">" << bn << "</FONT></TD>"
+                << "<TD BGCOLOR=\"" << bg << "\" ALIGN=\"RIGHT\" CELLPADDING=\"2\">"
+                << "<FONT POINT-SIZE=\"8\">" << bi << "</FONT></TD>"
+                << "</TR>\n";
+        }
+        dot << "  </TABLE>>]\n\n";
+        dot << "  " << parentNode << " -> " << bNode
+            << " [color=\"#e74c3c\" penwidth=1.2]\n\n";
+
+        // Recursión a hijos no especiales
+        for(int e = 0; e < 4; e++){
+            int childIdx = fb.b_content[e].b_inodo;
+            if(childIdx == -1) continue;
+            std::string cn(fb.b_content[e].b_name);
+            if(cn == "." || cn == "..") continue;
+            if(childIdx < sb.s_inodes_count && !visitedInodes[childIdx]){
+                std::string childPath = cn;
+                RepTreeVisit(dot, file, sb, childIdx, childPath, visitedInodes);
+                dot << "  " << bNode << ":e" << e << " -> ti_" << childIdx
+                    << " [color=\"#2980b9\" penwidth=1.0 style=dashed]\n\n";
+            }
+        }
+    } else {
+        // Bloque archivo
+        FileBlock fb{};
+        file.seekg(sb.s_block_start + blockIdx * (int)sizeof(FileBlock));
+        file.read(reinterpret_cast<char*>(&fb), sizeof(FileBlock));
+
+        std::string content;
+        for(int c = 0; c < (int)sizeof(fb.b_content); c++){
+            char ch = fb.b_content[c];
+            if(ch == '\0') break;
+            if(ch == '<') content += "&lt;";
+            else if(ch == '>') content += "&gt;";
+            else if(ch == '&') content += "&amp;";
+            else content += ch;
+        }
+        if(content.empty()) content = "(vacío)";
+
+        dot << "  " << bNode << " [label=<\n";
+        dot << "  <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"3\" "
+            << "BGCOLOR=\"#fef9e7\" COLOR=\"#d4ac0d\" WIDTH=\"160\">\n";
+        dot << "    <TR><TD BGCOLOR=\"#f7dc6f\" ALIGN=\"CENTER\" CELLPADDING=\"4\">"
+            << "<FONT COLOR=\"#7d6608\" POINT-SIZE=\"9\"><B>b. archivos " << blockIdx
+            << "</B></FONT></TD></TR>\n";
+        dot << "    <TR><TD BGCOLOR=\"#fef9e7\" ALIGN=\"LEFT\" CELLPADDING=\"3\">"
+            << "<FONT POINT-SIZE=\"8\">" << content << "</FONT></TD></TR>\n";
+        dot << "  </TABLE>>]\n\n";
+        dot << "  " << parentNode << " -> " << bNode
+            << " [color=\"#d4ac0d\" penwidth=1.2]\n\n";
+    }
+}
+
+static void RepTreeVisit(std::ofstream& dot, std::fstream& file, SuperBlock& sb,
+                         int inodeIdx, const std::string& inodePath,
+                         std::vector<bool>& visitedInodes)
+{
+    if(inodeIdx < 0 || inodeIdx >= sb.s_inodes_count) return;
+    if(visitedInodes[inodeIdx]) return;
+    visitedInodes[inodeIdx] = true;
+
+    Inode inode{};
+    file.seekg(sb.s_inode_start + inodeIdx * sizeof(Inode));
+    file.read(reinterpret_cast<char*>(&inode), sizeof(Inode));
+
+    bool isFolder = (inode.i_type == 0);
+    bool isFile   = (inode.i_type == 1);
+
+    std::string iNode = "ti_" + std::to_string(inodeIdx);
+
+    // Etiqueta de ruta encima
+    dot << "  lbl_" << inodeIdx << " [label=\"" << inodePath
+        << "\" shape=none fontsize=9 fontcolor=\"#1a1a1a\"]\n";
+    dot << "  lbl_" << inodeIdx << " -> " << iNode << " [style=invis]\n\n";
+
+    // Nodo inodo
+    std::string typeStr = isFolder ? "0 (carpeta)" : (isFile ? "1 (archivo)" : "?");
+    int ap0 = inode.i_block[0];
+    int ap1 = inode.i_block[12];
+    int ap2 = inode.i_block[13];
+
+    dot << "  " << iNode << " [label=<\n";
+    dot << "  <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"3\" "
+        << "BGCOLOR=\"#aed6f1\" COLOR=\"#1a5276\" WIDTH=\"140\">\n";
+    dot << "    <TR><TD COLSPAN=\"2\" BGCOLOR=\"#2980b9\" ALIGN=\"CENTER\" CELLPADDING=\"4\">"
+        << "<FONT COLOR=\"white\" POINT-SIZE=\"9\"><B>inodo " << inodeIdx
+        << "</B></FONT></TD></TR>\n";
+
+    auto irow = [&](const std::string& k, const std::string& v, bool even, const std::string& port=""){
+        std::string bg = even ? "#d6eaf8" : "#ffffff";
+        std::string portAttr = port.empty() ? "" : " PORT=\"" + port + "\"";
+        dot << "    <TR>"
+            << "<TD BGCOLOR=\"" << bg << "\" ALIGN=\"LEFT\" CELLPADDING=\"2\">"
+            << "<FONT POINT-SIZE=\"8\">" << k << "</FONT></TD>"
+            << "<TD BGCOLOR=\"" << bg << "\" ALIGN=\"RIGHT\" CELLPADDING=\"2\"" << portAttr << ">"
+            << "<FONT POINT-SIZE=\"8\">" << v << "</FONT></TD>"
+            << "</TR>\n";
+    };
+
+    irow("i_TYPE", typeStr,       false);
+    irow("ap0",    std::to_string(ap0), true,  "ap0");
+    irow("ap1",    ap1 != -1 ? std::to_string(ap1) : "-1", false, "ap1");
+    irow("ap2",    ap2 != -1 ? std::to_string(ap2) : "-1", true,  "ap2");
+    irow("i_perm", std::to_string(inode.i_perm), false);
+
+    dot << "  </TABLE>>]\n\n";
+
+    // Flecha ap0 → bloque directo
+    if(ap0 != -1){
+        RepTreeEmitBlock(dot, file, sb, ap0, isFolder, visitedInodes, iNode + ":ap0");
+    }
+
+    // ap1 → bloque apuntador simple
+    if(ap1 != -1){
+        std::string pNode = "tb_" + std::to_string(ap1);
+        PointerBlock pb{};
+        file.seekg(sb.s_block_start + ap1 * (int)sizeof(FileBlock));
+        file.read(reinterpret_cast<char*>(&pb), sizeof(PointerBlock));
+
+        // Emitir bloque apuntador
+        std::string ptrs;
+        for(int p = 0; p < 16; p++){
+            ptrs += std::to_string(pb.b_pointers[p]);
+            if(p < 15) ptrs += ", ";
+        }
+        dot << "  " << pNode << " [label=<\n";
+        dot << "  <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"3\" "
+            << "BGCOLOR=\"#f5cba7\" COLOR=\"#922b21\" WIDTH=\"160\">\n";
+        dot << "    <TR><TD BGCOLOR=\"#e59866\" ALIGN=\"CENTER\" CELLPADDING=\"4\">"
+            << "<FONT COLOR=\"white\" POINT-SIZE=\"9\"><B>b. apuntadores " << ap1
+            << "</B></FONT></TD></TR>\n";
+        dot << "    <TR><TD BGCOLOR=\"#fef5ec\" ALIGN=\"LEFT\" CELLPADDING=\"3\">"
+            << "<FONT POINT-SIZE=\"8\">" << ptrs << "</FONT></TD></TR>\n";
+        dot << "  </TABLE>>]\n\n";
+        dot << "  " << iNode << ":ap1 -> " << pNode << " [color=\"#e59866\" penwidth=1.2]\n\n";
+
+        for(int p = 0; p < 16; p++){
+            if(pb.b_pointers[p] == -1) break;
+            RepTreeEmitBlock(dot, file, sb, pb.b_pointers[p], isFolder, visitedInodes, pNode);
+        }
+    }
+
+    // ap2 → bloque apuntador doble
+    if(ap2 != -1){
+        std::string p1Node = "tb_" + std::to_string(ap2);
+        PointerBlock l1{};
+        file.seekg(sb.s_block_start + ap2 * (int)sizeof(FileBlock));
+        file.read(reinterpret_cast<char*>(&l1), sizeof(PointerBlock));
+
+        std::string ptrs1;
+        for(int p = 0; p < 16; p++){
+            ptrs1 += std::to_string(l1.b_pointers[p]);
+            if(p < 15) ptrs1 += ", ";
+        }
+        dot << "  " << p1Node << " [label=<\n";
+        dot << "  <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"3\" "
+            << "BGCOLOR=\"#f5cba7\" COLOR=\"#922b21\" WIDTH=\"160\">\n";
+        dot << "    <TR><TD BGCOLOR=\"#e59866\" ALIGN=\"CENTER\" CELLPADDING=\"4\">"
+            << "<FONT COLOR=\"white\" POINT-SIZE=\"9\"><B>b. apuntadores " << ap2
+            << "</B></FONT></TD></TR>\n";
+        dot << "    <TR><TD BGCOLOR=\"#fef5ec\" ALIGN=\"LEFT\" CELLPADDING=\"3\">"
+            << "<FONT POINT-SIZE=\"8\">" << ptrs1 << "</FONT></TD></TR>\n";
+        dot << "  </TABLE>>]\n\n";
+        dot << "  " << iNode << ":ap2 -> " << p1Node << " [color=\"#e59866\" penwidth=1.2]\n\n";
+
+        for(int i = 0; i < 16; i++){
+            if(l1.b_pointers[i] == -1) break;
+            std::string p2Node = "tb_" + std::to_string(l1.b_pointers[i]);
+            PointerBlock l2{};
+            file.seekg(sb.s_block_start + l1.b_pointers[i] * (int)sizeof(FileBlock));
+            file.read(reinterpret_cast<char*>(&l2), sizeof(PointerBlock));
+
+            std::string ptrs2;
+            for(int p = 0; p < 16; p++){
+                ptrs2 += std::to_string(l2.b_pointers[p]);
+                if(p < 15) ptrs2 += ", ";
+            }
+            dot << "  " << p2Node << " [label=<\n";
+            dot << "  <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"3\" "
+                << "BGCOLOR=\"#f5cba7\" COLOR=\"#922b21\" WIDTH=\"160\">\n";
+            dot << "    <TR><TD BGCOLOR=\"#e59866\" ALIGN=\"CENTER\" CELLPADDING=\"4\">"
+                << "<FONT COLOR=\"white\" POINT-SIZE=\"9\"><B>b. apuntadores " << l1.b_pointers[i]
+                << "</B></FONT></TD></TR>\n";
+            dot << "    <TR><TD BGCOLOR=\"#fef5ec\" ALIGN=\"LEFT\" CELLPADDING=\"3\">"
+                << "<FONT POINT-SIZE=\"8\">" << ptrs2 << "</FONT></TD></TR>\n";
+            dot << "  </TABLE>>]\n\n";
+            dot << "  " << p1Node << " -> " << p2Node << " [color=\"#e59866\" penwidth=1.2]\n\n";
+
+            for(int j = 0; j < 16; j++){
+                if(l2.b_pointers[j] == -1) break;
+                RepTreeEmitBlock(dot, file, sb, l2.b_pointers[j], isFolder, visitedInodes, p2Node);
+            }
+        }
+    }
+}
+
+static void RepTree(const std::string& outPath, std::fstream& file)
+{
+    CreateDirs(outPath);
+
+    int partStart = FindEXT2Partition(file);
+    if(partStart == -1){ std::cout << "Error: No se encontró partición EXT2\n"; return; }
+
+    SuperBlock sb{};
+    file.seekg(partStart);
+    file.read(reinterpret_cast<char*>(&sb), sizeof(SuperBlock));
+
+    std::string dotFile = outPath + ".dot";
+    std::ofstream dot(dotFile);
+    if(!dot.is_open()){ std::cout << "Error: No se pudo crear archivo dot\n"; return; }
+
+    dot << "digraph G {\n";
+    dot << "  graph [bgcolor=white rankdir=LR splines=ortho nodesep=0.5 ranksep=1.0]\n";
+    dot << "  node [shape=none margin=0]\n\n";
+
+    std::vector<bool> visitedInodes(sb.s_inodes_count, false);
+    RepTreeVisit(dot, file, sb, 0, "/", visitedInodes);
+
+    dot << "}\n";
+    dot.close();
+
+    RunDot(dotFile, outPath);
+    std::cout << "Reporte tree generado: " << outPath << "\n";
+}
+
+// ======================================================
 // ================= REP (dispatcher) ===================
 // ======================================================
 
@@ -1023,6 +1283,8 @@ void Rep(const std::string& name,
         RepBmInode(path, file);
     } else if(name == "bm_block" || name == "bm_bloc"){
         RepBmBlock(path, file);
+    } else if(name == "tree"){
+        RepTree(path, file);
     } else {
         std::cout << "Reporte '" << name << "' aún no implementado\n";
     }

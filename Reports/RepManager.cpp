@@ -878,6 +878,125 @@ static void RepBlock(const std::string& outPath, std::fstream& file)
 // ================= REP (dispatcher) ===================
 // ======================================================
 
+// ======================================================
+// ======= HELPER: encontrar partición EXT2 =============
+// ======================================================
+
+static int FindEXT2Partition(std::fstream& file)
+{
+    MBR mbr{};
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(&mbr), sizeof(MBR));
+
+    const int EXT2_MAGIC = 0xEF53;
+    // Buscar en primarias
+    for(int i = 0; i < 4; i++){
+        if(mbr.mbr_partitions[i].part_s > 0 &&
+           mbr.mbr_partitions[i].part_type != 'e' &&
+           mbr.mbr_partitions[i].part_type != 'E'){
+            SuperBlock tmp{};
+            file.seekg(mbr.mbr_partitions[i].part_start);
+            file.read(reinterpret_cast<char*>(&tmp), sizeof(SuperBlock));
+            if(tmp.s_magic == EXT2_MAGIC) return mbr.mbr_partitions[i].part_start;
+        }
+    }
+    // Buscar en lógicas
+    for(int i = 0; i < 4; i++){
+        if(mbr.mbr_partitions[i].part_s > 0 &&
+           (mbr.mbr_partitions[i].part_type == 'e' || mbr.mbr_partitions[i].part_type == 'E')){
+            int ebrPos = mbr.mbr_partitions[i].part_start;
+            while(ebrPos != -1){
+                EBR ebr{};
+                file.seekg(ebrPos);
+                file.read(reinterpret_cast<char*>(&ebr), sizeof(EBR));
+                if(ebr.part_s <= 0) break;
+                SuperBlock tmp{};
+                file.seekg(ebr.part_start);
+                file.read(reinterpret_cast<char*>(&tmp), sizeof(SuperBlock));
+                if(tmp.s_magic == EXT2_MAGIC) return ebr.part_start;
+                ebrPos = ebr.part_next;
+            }
+        }
+    }
+    return -1;
+}
+
+// ======================================================
+// ================= REPORTE BM_INODE ===================
+// ======================================================
+
+static void RepBmInode(const std::string& outPath, std::fstream& file)
+{
+    CreateDirs(outPath);
+
+    int partStart = FindEXT2Partition(file);
+    if(partStart == -1){ std::cout << "Error: No se encontró partición EXT2\n"; return; }
+
+    SuperBlock sb{};
+    file.seekg(partStart);
+    file.read(reinterpret_cast<char*>(&sb), sizeof(SuperBlock));
+
+    // Leer bitmap completo de inodos
+    std::vector<char> bitmap(sb.s_inodes_count);
+    file.seekg(sb.s_bm_inode_start);
+    file.read(bitmap.data(), sb.s_inodes_count);
+
+    std::ofstream out(outPath);
+    if(!out.is_open()){ std::cout << "Error: No se pudo crear archivo\n"; return; }
+
+    for(int i = 0; i < sb.s_inodes_count; i++){
+        out << bitmap[i]; // '0' o '1'
+        if((i + 1) % 20 == 0)
+            out << "\n";
+        else if(i + 1 < sb.s_inodes_count)
+            out << " ";
+    }
+    out << "\n";
+    out.close();
+
+    std::cout << "Reporte bm_inode generado: " << outPath << "\n";
+}
+
+// ======================================================
+// ================= REPORTE BM_BLOCK ===================
+// ======================================================
+
+static void RepBmBlock(const std::string& outPath, std::fstream& file)
+{
+    CreateDirs(outPath);
+
+    int partStart = FindEXT2Partition(file);
+    if(partStart == -1){ std::cout << "Error: No se encontró partición EXT2\n"; return; }
+
+    SuperBlock sb{};
+    file.seekg(partStart);
+    file.read(reinterpret_cast<char*>(&sb), sizeof(SuperBlock));
+
+    // Leer bitmap completo de bloques
+    std::vector<char> bitmap(sb.s_blocks_count);
+    file.seekg(sb.s_bm_block_start);
+    file.read(bitmap.data(), sb.s_blocks_count);
+
+    std::ofstream out(outPath);
+    if(!out.is_open()){ std::cout << "Error: No se pudo crear archivo\n"; return; }
+
+    for(int i = 0; i < sb.s_blocks_count; i++){
+        out << bitmap[i]; // '0' o '1'
+        if((i + 1) % 20 == 0)
+            out << "\n";
+        else if(i + 1 < sb.s_blocks_count)
+            out << " ";
+    }
+    out << "\n";
+    out.close();
+
+    std::cout << "Reporte bm_block generado: " << outPath << "\n";
+}
+
+// ======================================================
+// ================= REP (dispatcher) ===================
+// ======================================================
+
 void Rep(const std::string& name,
          const std::string& path,
          const std::string& id,
@@ -900,6 +1019,10 @@ void Rep(const std::string& name,
         RepInode(path, file);
     } else if(name == "block"){
         RepBlock(path, file);
+    } else if(name == "bm_inode"){
+        RepBmInode(path, file);
+    } else if(name == "bm_block" || name == "bm_bloc"){
+        RepBmBlock(path, file);
     } else {
         std::cout << "Reporte '" << name << "' aún no implementado\n";
     }

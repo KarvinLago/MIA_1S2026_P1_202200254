@@ -3,6 +3,7 @@
 #include "../Utilities/FileUtils.h"
 #include <iostream>
 #include <algorithm>
+#include <ctime>
 
 std::vector<MountedPartition> mountedList;
 
@@ -25,7 +26,6 @@ void Mount(const std::string& path, const std::string& name)
     // ── Verificar que la partición existe (MBR o EBR) ──
     bool found = false;
 
-    // Buscar en particiones primarias/extendidas del MBR
     for(int i = 0; i < 4; i++){
         if(mbr.mbr_partitions[i].part_s > 0 &&
            std::string(mbr.mbr_partitions[i].part_name) == name){
@@ -34,7 +34,6 @@ void Mount(const std::string& path, const std::string& name)
         }
     }
 
-    // Si no encontró, buscar en EBR de la partición extendida
     if(!found)
     {
         for(int i = 0; i < 4; i++)
@@ -64,9 +63,8 @@ void Mount(const std::string& path, const std::string& name)
         }
     }
 
-    file.close();
-
     if(!found){
+        file.close();
         std::cout << "Error: Partición no encontrada\n";
         return;
     }
@@ -74,10 +72,29 @@ void Mount(const std::string& path, const std::string& name)
     // ── Verificar que no esté ya montada ──
     for(const auto& m : mountedList){
         if(m.path == path && m.name == name){
+            file.close();
             std::cout << "Error: Partición ya montada\n";
             return;
         }
     }
+
+    // ── Actualizar s_umtime y s_mnt_count (archivo aún abierto) ──
+    int partStart = -1; int partSize = -1;
+    FileUtils::FindPartition(file, name, partStart, partSize);
+    if(partStart != -1){
+        SuperBlock sb{};
+        file.seekg(partStart);
+        file.read(reinterpret_cast<char*>(&sb), sizeof(SuperBlock));
+        if(sb.s_magic == 0xEF53){
+            sb.s_umtime = time(nullptr);
+            sb.s_mnt_count++;
+            file.seekp(partStart);
+            file.write(reinterpret_cast<char*>(&sb), sizeof(SuperBlock));
+            file.flush();
+        }
+    }
+
+    file.close();
 
     // ── Generar letra del disco ──
     char letter = 0;

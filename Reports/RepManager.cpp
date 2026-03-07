@@ -1254,6 +1254,97 @@ static void RepTree(const std::string& outPath, std::fstream& file)
 }
 
 // ======================================================
+// ================= REPORTE SB =========================
+// ======================================================
+
+static void RepSb(const std::string& outPath, std::fstream& file,
+                  const std::string& diskPath)
+{
+    CreateDirs(outPath);
+
+    int partStart = FindEXT2Partition(file);
+    if(partStart == -1){ std::cout << "Error: No se encontró partición EXT2\n"; return; }
+
+    SuperBlock sb{};
+    file.seekg(partStart);
+    file.read(reinterpret_cast<char*>(&sb), sizeof(SuperBlock));
+
+    std::string dotFile = outPath + ".dot";
+    std::ofstream dot(dotFile);
+    if(!dot.is_open()){ std::cout << "Error: No se pudo crear archivo dot\n"; return; }
+
+    const std::string HDR  = "#1e8449";
+    const std::string ROW1 = "#ffffff";
+    const std::string ROW2 = "#a9dfbf";
+    const std::string FONT = "#1a1a1a";
+
+    std::string diskName = diskPath.substr(diskPath.find_last_of('/') + 1);
+
+    auto timeStr = [](time_t t) -> std::string {
+        if(t <= 0) return "N/A";
+        char buf[32];
+        struct tm* tm_info = localtime(&t);
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", tm_info);
+        return std::string(buf);
+    };
+
+    auto row = [&](const std::string& key, const std::string& val, bool even){
+        std::string bg = even ? ROW2 : ROW1;
+        dot << "    <TR>"
+            << "<TD BGCOLOR=\"" << bg << "\" ALIGN=\"RIGHT\" CELLPADDING=\"5\">"
+            << "<FONT COLOR=\"" << FONT << "\">" << key << "</FONT></TD>"
+            << "<TD BGCOLOR=\"" << bg << "\" ALIGN=\"LEFT\" CELLPADDING=\"5\">"
+            << "<FONT COLOR=\"" << FONT << "\">" << val << "</FONT></TD>"
+            << "</TR>\n";
+    };
+
+    // Hex helper para magic
+    auto toHex = [](int val) -> std::string {
+        std::ostringstream ss;
+        ss << "0x" << std::hex << std::uppercase << val;
+        return ss.str();
+    };
+
+    dot << "digraph G {\n";
+    dot << "  graph [bgcolor=white]\n";
+    dot << "  node [shape=none margin=0]\n\n";
+    dot << "  sb [label=<\n";
+    dot << "  <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\" "
+        << "BGCOLOR=\"white\" COLOR=\"#aaaaaa\" WIDTH=\"420\">\n";
+
+    dot << "    <TR><TD COLSPAN=\"2\" BGCOLOR=\"" << HDR << "\" ALIGN=\"CENTER\" CELLPADDING=\"8\">"
+        << "<FONT COLOR=\"white\"><B>Reporte de SUPERBLOQUE</B></FONT></TD></TR>\n";
+
+    row("sb_nombre_hd",                diskName,                              false);
+    row("sb_inodos_count",             std::to_string(sb.s_inodes_count),     true);
+    row("sb_bloques_count",            std::to_string(sb.s_blocks_count),     false);
+    row("sb_inodos_free",              std::to_string(sb.s_free_inodes_count),true);
+    row("sb_bloques_free",             std::to_string(sb.s_free_blocks_count),false);
+    row("sb_date_creacion",            timeStr(sb.s_mtime),                   true);
+    row("sb_date_ultimo_montaje",      timeStr(sb.s_umtime),                  false);
+    row("sb_montajes_count",           std::to_string(sb.s_mnt_count),        true);
+    row("sb_ap_bitmap_inodos",         std::to_string(sb.s_bm_inode_start),   false);
+    row("sb_ap_inodos",                std::to_string(sb.s_inode_start),      true);
+    row("sb_ap_bitmap_bloques",        std::to_string(sb.s_bm_block_start),   false);
+    row("sb_ap_bloques",               std::to_string(sb.s_block_start),      true);
+    row("sb_size_struct_inodo",        std::to_string(sb.s_inode_size),       false);
+    row("sb_size_struct_bloque",       std::to_string(sb.s_block_size),       true);
+    row("sb_first_free_bit_inodos",    std::to_string(sb.s_first_ino),        false);
+    row("sb_first_free_bit_bloques",   std::to_string(sb.s_first_blo),        true);
+    row("sb_magic_num",                toHex(sb.s_magic),                     false);
+
+    dot << "    <TR><TD COLSPAN=\"2\" BGCOLOR=\"" << HDR << "\" ALIGN=\"CENTER\" CELLPADDING=\"6\">"
+        << "<FONT COLOR=\"white\"><B>Reporte de SUPERBLOQUE</B></FONT></TD></TR>\n";
+
+    dot << "  </TABLE>>]\n";
+    dot << "}\n";
+    dot.close();
+
+    RunDot(dotFile, outPath);
+    std::cout << "Reporte sb generado: " << outPath << "\n";
+}
+
+// ======================================================
 // ================= REP (dispatcher) ===================
 // ======================================================
 
@@ -1285,6 +1376,8 @@ void Rep(const std::string& name,
         RepBmBlock(path, file);
     } else if(name == "tree"){
         RepTree(path, file);
+    } else if(name == "sb"){
+        RepSb(path, file, mounted->path);
     } else {
         std::cout << "Reporte '" << name << "' aún no implementado\n";
     }
